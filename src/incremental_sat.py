@@ -1,17 +1,3 @@
-#!/usr/bin/env python3
-"""
-Incremental SAT solver for the HCORAP problem.
-
-Uses a single solver instance with top-down linear search
-(clause-addition approach). Learned clauses are preserved
-across iterations.
-
-Corresponds to Algorithm 5 in doc/main.tex (§6.2).
-
-Usage:
-    python3 incremental_sat.py <instance> [--solver glucose4]
-"""
-
 import time
 import argparse
 from pysat.solvers import Solver
@@ -21,15 +7,6 @@ from hcorap_encoding import HCORAPInstance, HCORAPEncoding, verify_solution
 
 
 def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
-    """
-    Incremental top-down linear search.
-
-    1. Initialise solver with all hard clauses
-    2. Find initial feasible solution
-    3. Add permanent clauses enforcing obj ≥ K+1
-    4. Re-solve (learned clauses preserved)
-    5. Repeat until UNSAT → last SAT model is optimal
-    """
     solver = Solver(name=solver_name)
     for cl in enc.hard_clauses:
         solver.add_clause(cl)
@@ -37,8 +14,6 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
     print(f"[INFO] Solver: {solver_name}, {enc.vm.num_vars} vars, "
           f"{len(enc.hard_clauses)} hard, {len(enc.soft_clauses)} soft")
 
-    # --- Build objective representation ---
-    # Convert all soft clauses to (literal, weight) pairs
     obj_pairs = []
     for lits, w in enc.soft_clauses:
         if isinstance(lits, int):
@@ -46,7 +21,6 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
         elif len(lits) == 1:
             obj_pairs.append((lits[0], w))
         else:
-            # Multi-literal soft clause: introduce aux ⟺ ∨(lits)
             aux = enc.vm.new_var()
             for l in lits:
                 solver.add_clause([-l, aux])
@@ -59,7 +33,6 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
     t_start = time.time()
     n_calls = 0
 
-    # Step 1: Find initial feasible solution
     n_calls += 1
     if not solver.solve():
         print("[INFO] UNSATISFIABLE")
@@ -72,12 +45,9 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
     best_model = model
     print(f"  [{n_calls:2d}] Initial: obj={best_obj}")
 
-    # Step 2: Iteratively tighten bound (top-down)
     while best_obj < total_W:
         target = best_obj + 1
 
-        # Encode: Σ w_i · lit_i ≥ target
-        # ⟺  Σ w_i · (¬lit_i) ≤ total_W − target
         neg_lits = [-l for l, w in obj_pairs]
         weights = [w for l, w in obj_pairs]
         bound = total_W - target
@@ -85,7 +55,6 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
         if bound < 0:
             break
 
-        # Weighted at-most via expansion (each ¬lit repeated w times)
         expanded = []
         for nl, wt in zip(neg_lits, weights):
             expanded.extend([nl] * wt)
@@ -97,7 +66,6 @@ def solve_incremental(enc: HCORAPEncoding, solver_name='glucose4'):
             while enc.vm.num_vars < cnf.nv:
                 enc.vm.new_var()
 
-        # Add permanent clauses (clause-addition approach)
         for cl in cnf.clauses:
             solver.add_clause(cl)
 
@@ -139,13 +107,11 @@ def main():
     print("  HCORAP Incremental SAT Solver")
     print("=" * 60)
 
-    # Parse
     print(f"\n[INFO] Parsing: {args.instance}")
     t0 = time.time()
     inst = HCORAPInstance(args.instance)
     print(f"[INFO] {inst}  ({time.time()-t0:.3f}s)")
 
-    # Encode
     print(f"\n[INFO] Encoding...")
     t0 = time.time()
     enc = HCORAPEncoding(inst)
@@ -154,7 +120,6 @@ def main():
           f"{enc.vm.num_vars} vars, {len(enc.hard_clauses)} hard, "
           f"{len(enc.soft_clauses)} soft")
 
-    # Solve
     print(f"\n[INFO] Solving (incremental top-down)...")
     t0 = time.time()
     result = solve_incremental(enc, solver_name=args.solver)

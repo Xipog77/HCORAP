@@ -27,3 +27,5 @@ The instance is written to standard output channel. If, for instance, saved to a
 ```sh
 wmaxcdcl_static instance.wcnf
 ```
+
+
