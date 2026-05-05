@@ -147,22 +147,55 @@ class HCORAPEncoding:
                 else:
                     self.w[(a, q)] = self.vm.new_var()
 
+    def _equivalent_agent_pairs(self):
+        """Agents with identical availability, similarity row, and hour limits."""
+        inst = self.inst
+        pairs = []
+        for a in range(inst.A):
+            sig = (tuple(inst.TSA[a]), tuple(inst.r[a]),
+                   inst.HN[a], inst.HE[a])
+            for b in range(a + 1, inst.A):
+                sig_b = (tuple(inst.TSA[b]), tuple(inst.r[b]),
+                         inst.HN[b], inst.HE[b])
+                if sig == sig_b:
+                    pairs.append((a, b))
+        return pairs
+
     def _add_amo(self, lits):
         if len(lits) <= 1:
             return
-        if len(lits) <= 6:
-            for i in range(len(lits)):
-                for j in range(i + 1, len(lits)):
-                    self._add_hard([-lits[i], -lits[j]])
+        from pysat.card import CardEnc, EncType
+        if len(lits) <= 10:
+            enc = EncType.pairwise
         else:
-            from pysat.card import CardEnc, EncType
-            cnf = CardEnc.atmost(lits, bound=1,
-                                 top_id=self.vm.num_vars,
-                                 encoding=EncType.seqcounter)
-            if cnf.nv > self.vm.num_vars:
-                while self.vm.num_vars < cnf.nv:
-                    self.vm.new_var()
-            self.hard_clauses.extend(cnf.clauses)
+            enc = EncType.bitwise
+        cnf = CardEnc.atmost(lits, bound=1, top_id=self.vm.num_vars,
+                             encoding=enc)
+        if cnf.nv > self.vm.num_vars:
+            while self.vm.num_vars < cnf.nv:
+                self.vm.new_var()
+        self.hard_clauses.extend(cnf.clauses)
+
+    def _add_card_atmost(self, lits, k):
+        """Cardinality ∑ lits ≤ k."""
+        if len(lits) <= 1 or k < 0:
+            return
+        if k >= len(lits):
+            return
+        if k == 0:
+            for v in lits:
+                self._add_hard([-v])
+            return
+        from pysat.card import CardEnc, EncType
+        # `bitwise` is mainly for AMO; for general at-most-k it may raise
+        # UnsupportedBound on larger k. Use a general-purpose encoding here.
+        enc = EncType.seqcounter
+        cnf = CardEnc.atmost(lits, bound=k, top_id=self.vm.num_vars,
+                             encoding=enc)
+        if cnf.nv > self.vm.num_vars:
+            while self.vm.num_vars < cnf.nv:
+                self.vm.new_var()
+        self.hard_clauses.extend(cnf.clauses)
 
     def _encode_hard(self):
         inst = self.inst
@@ -228,6 +261,12 @@ class HCORAPEncoding:
                           if (s, t) in self.z]
                 self._add_amo(z_vars)
 
+        # --- Symmetry breaking: y[b,s] ⇒ y[a,s] for equivalent agents a < b ---
+        for a, b in self._equivalent_agent_pairs():
+            for s in range(inst.S):
+                if (a, s) in self.y and (b, s) in self.y:
+                    self._add_hard([-self.y[(b, s)], self.y[(a, s)]])
+
         # --- C5: Service coverage (eq:cov-hard) ---
         for s in range(inst.S):
             z_vars = [self.z[(s, t)] for t in range(inst.TS)
@@ -240,14 +279,7 @@ class HCORAPEncoding:
             y_vars = [self.y[(a, s)] for s in range(inst.S)
                       if (a, s) in self.y]
             if len(y_vars) > max_hours:
-                from pysat.card import CardEnc, EncType
-                cnf = CardEnc.atmost(y_vars, bound=max_hours,
-                                     top_id=self.vm.num_vars,
-                                     encoding=EncType.seqcounter)
-                if cnf.nv > self.vm.num_vars:
-                    while self.vm.num_vars < cnf.nv:
-                        self.vm.new_var()
-                self.hard_clauses.extend(cnf.clauses)
+                self._add_card_atmost(y_vars, max_hours)
 
     def _build_sorting_network(self, lits):
         n = len(lits)
@@ -318,6 +350,32 @@ class HCORAPEncoding:
                 self._add_soft(-w_hat_outputs[k], abs_P)
 
 
+def evaluate_cop_objective(inst: HCORAPInstance, assignments):
+    """
+    COP objective from doc/main.tex Eq. (sat-obj)–(cost), same as prompt §4:
+      objective = similarity + stability - cost
+    """
+    abs_p = abs(inst.P)
+
+    similarity = sum(inst.r[a][s] for a, s, t in assignments)
+
+    stability = 0
+    for seq in inst.SEQ:
+        agents_in_seq = {a for a, s, t in assignments if s in seq}
+        k = len(agents_in_seq)
+        L = len(seq)
+        # sum_{i=1..L} (1 - c_{q,i}) with c_{q,i} <=> (k >= i)  =>  max(0, L - k)
+        stability += max(0, L - k)
+
+    agent_hours = Counter(a for a, s, t in assignments)
+    cost = 0
+    for a in range(inst.A):
+        h = agent_hours.get(a, 0)
+        cost += abs_p * max(0, h - inst.HN[a])
+
+    return similarity, stability, cost, similarity + stability - cost
+
+
 def verify_solution(inst: HCORAPInstance, enc: HCORAPEncoding, model):
     model_set = set(model)
     ok = True
@@ -360,22 +418,8 @@ def verify_solution(inst: HCORAPInstance, enc: HCORAPEncoding, model):
             print(f"  [FAIL] C6: agent {a} works {h} > "
                   f"{inst.HN[a]}+{inst.HE[a]}"); ok = False
 
-    similarity = sum(inst.r[a][s] for a, s, t in assignments)
-
-    continuity_penalty = 0
-    for seq in inst.SEQ:
-        agents_in_seq = set(a for a, s, t in assignments if s in seq)
-        if len(agents_in_seq) > 1:
-            continuity_penalty += len(agents_in_seq) - 1
-
-    abs_P = -inst.P
-    extra_hour_cost = 0
-    for a in range(inst.A):
-        h = agent_hours.get(a, 0)
-        if h > inst.HN[a]:
-            extra_hour_cost += (h - inst.HN[a]) * abs_P
-
-    objective = similarity - continuity_penalty - extra_hour_cost
+    similarity, stability, cost, objective = evaluate_cop_objective(
+        inst, assignments)
 
     print(f"\n  === Solution Verification ===")
     print(f"  Hard constraints:  {'OK' if ok else 'FAILED'}")
@@ -383,8 +427,8 @@ def verify_solution(inst: HCORAPInstance, enc: HCORAPEncoding, model):
     print(f"  Uncovered:         {len(uncovered)}")
     print(f"  ---")
     print(f"  O1 Similarity:     +{similarity}")
-    print(f"  O2 Continuity:     −{continuity_penalty}")
-    print(f"  O3 Extra hours:    −{extra_hour_cost}")
+    print(f"  O2 Stability:      +{stability}")
+    print(f"  O3 Cost:           −{cost}")
     print(f"  ---")
-    print(f"  Objective:         {objective}")
+    print(f"  Objective (sim+stab−cost): {objective}")
     return ok

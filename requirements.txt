@@ -1,0 +1,2 @@
+python-sat>=3.2.0
+pypblib>=0.0.3

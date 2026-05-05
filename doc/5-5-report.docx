@@ -1,0 +1,47 @@
+- Đã kiểm tra và sửa lại output của các phiên bản solver cho giống nhau.
+- Thực hiện cài đặt SAT nhiều lần: Chạy hard_clauses 10 lần rồi lấy LB-UB để thực hiện binary search. Tuy nhiên kết quả vẫn rất chậm thậm chí chậm hơn cả Incremental SAT và time-out thường xuyên.
+Lý do: Phương pháp này tuy sớm tìm được cận trên và dưới, tuy nhiên do kích thước bài toán quá lớn và phức tạp nên để thu về được đáp án Optimal vẫn rất khó
+- Đã cài đặt và chạy thành công evilmaxsatL. Đạt được tốc độ giải như trong bài báo.
+- So sánh các solver:
+1. Glucose (SAT Solver)
+Đặc điểm: Glucose là một bộ giải SAT thuần túy, tập trung vào việc tìm kiếm tính khả thi của các mệnh đề logic.  
+
+Hạn chế trong HCORAP:
+
+Bài toán được mô hình hóa dưới dạng Weighted Partial MaxSAT, không phải SAT đơn thuần.  
+
+Nếu sử dụng Glucose, lập trình viên phải tự xây dựng thêm các vòng lặp tối ưu hóa bên ngoài (như tìm kiếm nhị phân) để xử lý các ràng buộc mềm.  
+
+Cách tiếp cận này kém tự nhiên và khó mở rộng (scale) khi số lượng ràng buộc mềm về độ tương đồng, tính ổn định và chi phí trở nên lớn.  
+
+2. WMaxCDCL (C++)
+Đặc điểm: Đây là một bộ giải MaxSAT sử dụng thuật toán Branch-and-Bound kết hợp với kỹ thuật học mệnh đề (clause learning).  
+
+Lợi thế lý thuyết: Phù hợp với các bài toán có hàm mục tiêu trọng số rõ ràng và các ràng buộc tổ hợp phức tạp.  
+
+Tự ước lượng LB - UB dựa trên Soft clauses, nếu LB nhánh này vượt quá UB nhánh kia: thực hiện cắt bỏ nhánh vì chắc chắn không thể tìm thấy lời giải tốt hơn ở hướng này
+
+Hạn chế thực nghiệm:
+
+Mặc dù mạnh mẽ về tối ưu hóa dựa trên tìm kiếm, WMaxCDCL lại không đạt hiệu quả cao nhất trong các thử nghiệm thực tế của bài báo.  
+
+Nguyên nhân là do không gian tìm kiếm của HCORAP quá lớn và cấu trúc bài toán chứa nhiều ràng buộc về số lượng (cardinality constraints) khiến việc cắt tỉa (pruning) dựa trên cận (bound) trở nên khó khăn.  
+
+3. EvalMaxSAT (C++)
+Đặc điểm: Là một bộ giải dựa trên SAT (SAT-based) và dựa trên lõi không thỏa mãn (core-based).  
+
+Cơ chế hoạt động: Solver này truy vấn một SAT solver đóng vai trò "oracle" nhiều lần để xác định các tập hợp con không thỏa mãn của các ràng buộc mềm, sau đó nới lỏng chúng dần dần để đạt tối ưu.  
+
+Đặt LB = 0 và cho các UNSAT cores tìm và nới lỏng LB. Tối ưu: Khi không còn tìm thấy lõi UNSAT nào nữa, giá trị LB hiện tại chính là giá trị tối ưu. 
+
+Lợi thế vượt trội trong HCORAP:
+
+Đạt hiệu suất tốt nhất trong các thực nghiệm nhờ khả năng khai thác cấu trúc toàn cục của bài toán thông qua lõi UNSAT.  
+
+Xử lý hiệu quả các mạng lưới phân loại (sorting networks) được dùng để mã hóa các ràng buộc về giờ làm việc.  
+
+Tìm được nghiệm tối ưu trong thời gian hợp lý và có khả năng mở rộng tốt khi tăng số lượng nhân viên hoặc dịch vụ.
+
+Hướng đi sắp tới: Thử áp dụng các phương pháp Symmetry Breaking, Totalizer Encoding và Generalized Totalizer cho encodung gốc.
+Xây dựng phiên bản sử dụng SMT solver
+Nghiên cứu các solver mới cạnh tranh với evilmaxsatL

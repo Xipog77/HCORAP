@@ -1,0 +1,35 @@
+-- sorting network encoding
+Trong ngữ cảnh của bài toán MaxSAT và tài liệu nghiên cứu bạn cung cấp, **Sorting Network Encoding** (Mã hóa mạng lưới phân loại) là một kỹ thuật mạnh mẽ được sử dụng để chuyển đổi các **ràng buộc số lượng (cardinality constraints)** thành các mệnh đề logic mà bộ giải SAT có thể hiểu được[cite: 1].
+
+Dưới đây là chi tiết về kỹ thuật này:
+
+### 1. Định nghĩa cơ bản
+Bình thường, trong logic mệnh đề, chúng ta không thể viết trực tiếp phép toán cộng như $\sum x_i \ge k$[cite: 1]. Sorting Network Encoding giải quyết vấn đề này bằng cách mô phỏng một mạng lưới phần cứng dùng để sắp xếp các bit dữ liệu[cite: 1].
+
+*   **Đầu vào**: Một tập hợp $n$ biến Boolean $\{x_1, x_2, ..., x_n\}$[cite: 1].
+*   **Đầu ra**: Một tập hợp $n$ biến mới $\{y_1, y_2, ..., y_n\}$ đã được "sắp xếp"[cite: 1].
+*   **Nguyên lý**: Các giá trị "True" (1) sẽ được đẩy về phía đầu của dãy đầu ra[cite: 1]. Nếu có $k$ biến đầu vào là True, thì $k$ biến đầu ra đầu tiên ($y_1, ..., y_k$) sẽ là True, và các biến còn lại ($y_{k+1}, ..., y_n$) sẽ là False[cite: 1].
+
+
+
+### 2. Cách hoạt động: Bộ so sánh (Comparator)
+Trái tim của mạng lưới này là các "bộ so sánh" nhận 2 đầu vào ($x_1, x_2$) và trả về 2 đầu ra ($out_{max}, out_{min}$)[cite: 1]:
+*   $out_{max} = x_1 \lor x_2$ (True nếu ít nhất một đầu vào là True)[cite: 1].
+*   $out_{min} = x_1 \land x_2$ (True nếu cả hai đầu vào đều là True)[cite: 1].
+
+Bằng cách kết nối nhiều bộ so sánh theo cấu trúc như **Batcher's Odd-Even Mergesort**, hệ thống có thể đếm được tổng số biến đang mang giá trị True[cite: 1].
+
+### 3. Ứng dụng cụ thể trong bài toán HCORAP
+Trong tài liệu bạn tham khảo, mã hóa này được dùng để xử lý hai thành phần quan trọng[cite: 1]:
+
+*   **Giờ làm việc của nhân viên ($w_{a,i}$)**: Dùng để xác định xem nhân viên $a$ có làm việc ít nhất $i$ giờ hay không[cite: 1]. Hệ thống sắp xếp các khung giờ làm việc của nhân viên; nếu biến đầu ra thứ $i$ là True, nghĩa là nhân viên đó đã làm việc ít nhất $i$ giờ[cite: 1].
+*   **Số lượng nhân viên khác nhau ($c_{q,i}$)**: Dùng để đếm xem có bao nhiêu nhân viên khác nhau tham gia vào một chuỗi dịch vụ $q$ của người dùng[cite: 1]. Nếu biến đầu ra thứ $i$ của mạng lưới này là True, điều đó có nghĩa là có ít nhất $i$ nhân viên tham gia[cite: 1].
+
+### 4. Tại sao lại sử dụng kỹ thuật này?
+*   **Tính hiệu quả**: Nó tạo ra cấu trúc mệnh đề giúp bộ giải SAT thực hiện "lan truyền đơn vị" (unit propagation) rất nhanh[cite: 1].
+*   **Độ phức tạp**: Mã hóa này chỉ giới thiệu thêm $O(n \log^2 n)$ biến và mệnh đề mới, giúp bài toán duy trì ở quy mô có thể giải được (polynomial size) ngay cả khi số lượng dịch vụ và nhân viên tăng lên[cite: 1].
+*   **Khả năng tối ưu**: Nó cho phép định nghĩa các biến phụ trợ ($y_i$) để gán trọng số (soft clauses), từ đó giúp bộ giải MaxSAT biết được khi nào cần "phạt" hoặc "thưởng" dựa trên số lượng cụ thể các điều kiện được thỏa mãn[cite: 1].
+
+Tóm lại, Sorting Network Encoding đóng vai trò như một "bộ đếm logic" giúp chuyển đổi các phép tính số học (giờ làm việc, số nhân viên) sang ngôn ngữ của các mệnh đề True/False[cite: 1].
+
+Hàm solve_incremental thực hiện tìm kiếm theo kiểu Top-Down (từ giá trị mục tiêu cao xuống thấp). Với bài toán có không gian tìm kiếm lớn, việc liên tục thêm các ràng buộc atmost vào solver sau mỗi bước nhảy sẽ làm "ô nhiễm" không gian hệ quả logic, khiến các lần gọi solver.solve() sau đó càng lúc càng nặng nề.
