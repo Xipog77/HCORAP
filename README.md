@@ -17,6 +17,8 @@ in the root directory.
 
 Once compiled, an instance `INSTANCE.txt` can be encoded into MaxSAT by running:
 
+
+
 ```sh
 ./bin/release/hcorap2sat -e=1 -f=dimacs -S=0 INSTANCE.txt
 ```
@@ -28,4 +30,30 @@ The instance is written to standard output channel. If, for instance, saved to a
 wmaxcdcl_static instance.wcnf
 ```
 
+# venv
+```sh
+source /home/dokhanh/Desktop/data/Lab/HCORAP/.venv/bin/activate
+deactivate
+```
+
+# wmaxcdcl
+```sh
+./bin/release/hcorap2sat -e=1 -f=dimacs -S=0 instance.txt > instance.wcnf && ./solver/wmaxcdcl_static instance.wcnf
+```
+# EvalMaxSAT
+```sh
+./bin/release/hcorap2sat -e=1 -f=dimacs -S=0 instance.txt > instance.wcnf && ./solver/EvalMaxSAT_bin instance.wcnf
+```
+# incremental_sat
+```sh
+python3 new_encoding/incremental_sat.py instance.txt
+```
+# maxsat
+```sh
+python3 new_encoding/maxsat_solver.py instance.txt
+```
+# normal
+```sh
+python3 new_encoding/normal_sat.py instance.txt
+```
 
