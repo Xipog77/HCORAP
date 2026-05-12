@@ -1,7 +1,3 @@
-//
-// Created by jordic on 06/02/24.
-//
-
 #include "HCORAPEncoding.h"
 #include <vector>
 #include <fstream>
