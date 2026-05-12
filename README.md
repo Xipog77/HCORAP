@@ -46,14 +46,22 @@ deactivate
 ```
 # incremental_sat
 ```sh
-python3 new_encoding/incremental_sat.py instance.txt
+python3 new_encoding/incremental_sat_PBenc.py instance.txt
+python3 new_encoding/incremental_sat_cardical.py instance.txt --solver cadical153 --search-mode linear
 ```
 # maxsat
 ```sh
 python3 new_encoding/maxsat_solver.py instance.txt
+python3 work_encoding/maxsat_solver.py instance.txt
+python3 work_encoding/maxsat_solver.py instance.txt --solver ./solver/EvalMaxSAT_bin
 ```
 # normal
 ```sh
-python3 new_encoding/normal_sat.py instance.txt
+python3 new_encoding/normal_sat_binary.py instance.txt
+python3 work_encoding/normal_sat_linear.py instance.txt
 ```
 
+# benchmark
+```sh
+python3 benchmark_runner.py
+```

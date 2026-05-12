@@ -33,3 +33,9 @@ Trong tài liệu bạn tham khảo, mã hóa này được dùng để xử lý
 Tóm lại, Sorting Network Encoding đóng vai trò như một "bộ đếm logic" giúp chuyển đổi các phép tính số học (giờ làm việc, số nhân viên) sang ngôn ngữ của các mệnh đề True/False[cite: 1].
 
 Hàm solve_incremental thực hiện tìm kiếm theo kiểu Top-Down (từ giá trị mục tiêu cao xuống thấp). Với bài toán có không gian tìm kiếm lớn, việc liên tục thêm các ràng buộc atmost vào solver sau mỗi bước nhảy sẽ làm "ô nhiễm" không gian hệ quả logic, khiến các lần gọi solver.solve() sau đó càng lúc càng nặng nề.
+
+-- Đổi sang cardical: nhanh hơn so với PBEnc (262.61s vs 361.41s )
+-- đổi sang linear search (nhanh hơn so với bài toán nhỏ, nhưng vẫn time-out tại bài toán lớn: 179.62s linear vs 485.86s-binary)
+-- kiểm tra chuyển đổi c++ sang py. 
+Sau đó thử nghiệm các cách encoding mới
+-- check lại các công thức-hàm encode được tác giả sử dụng
