@@ -1,10 +1,12 @@
 import os
 import subprocess
 import time
+import re
 from pathlib import Path
 
 # Đường dẫn đến thư mục chứa các file instances (.txt)
 INSTANCE_FOLDER = "instances/paperInstances/TXT_10-25_4-5_U40"
+# INSTANCE_FOLDER = "instances/paperInstances/TXT_10-25_4-5_U30"
 
 # Lệnh gọi giải (giữ nguyên phần {instance} để script tự điền tên file)
 SOLVE_COMMAND = "python3 work_encoding/maxsat_solver.py {instance} --solver ./solver/EvalMaxSAT_bin"
@@ -59,7 +61,13 @@ def run_benchmark():
 
             # Kiểm tra kết quả trong output
             if "OK" in output or "optimal" in output.lower() or "Optimum found" in output:
-                print(f" XONG ({elapsed:.2f}s)")
+                # Tìm giá trị mục tiêu (objective) trong output
+                obj_match = re.search(r"Objective \(sim\+stab[−-]cost\):\s*([-]?\d+)", output)
+                if not obj_match:
+                    obj_match = re.search(r"Optimum found:\s*([-]?\d+)", output)
+                
+                obj_str = obj_match.group(1) if obj_match else "?"
+                print(f" XONG ({elapsed:.2f}s) -> Obj: {obj_str}")
                 results["solved"] += 1
             elif "UNSATISFIABLE" in output or "unsat" in output.lower():
                 print(f" UNSAT ({elapsed:.2f}s)")

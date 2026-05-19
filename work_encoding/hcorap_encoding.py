@@ -408,6 +408,10 @@ class HCORAPEncoding:
                     self._add_hard([-yv, wv])
                 self._add_hard([-wv] + yvars)
 
+        # --- [THÊM MỚI]: Gọi Symmetry Breaking sau khi có đủ biến y ---
+        # Bỏ comment dòng dưới để bật Linear Lex-Leader Symmetry Breaking
+        self._add_symmetry_breaking()
+
         # --- 7) Sequence consistency (sorting network + soft) ---
         for q in range(len(inst.SEQ)):
             if len(inst.SEQ[q]) == 1:
@@ -466,6 +470,54 @@ class HCORAPEncoding:
                 self._add_hard(zvars)
 
         print(f"c {self.total_soft} {self.konstant_revenue}")
+
+    # =========================================================================
+    # SYMMETRY BREAKING (Được cấy từ hcorap_encoding_new.py)
+    # =========================================================================
+    def _add_symmetry_breaking(self):
+        inst = self.inst
+        # Tìm các nhóm agent có profile giống hệt nhau
+        groups = {}
+        for a in range(inst.A):
+            # Đặc trưng của Agent: r(a,s) và TSA(a)
+            profile = (tuple(inst.r[a]), tuple(inst.TSA[a]))
+            if profile not in groups: groups[profile] = []
+            groups[profile].append(a)
+
+        for profile, agents in groups.items():
+            if len(agents) < 2: continue
+            
+            # Với mỗi cặp agent liên tiếp trong nhóm đối xứng
+            for i in range(len(agents) - 1):
+                a1, a2 = agents[i], agents[i+1]
+                # Ép thứ tự từ điển nghiêm ngặt (y1 >=lex y2)
+                self._add_lex_order(a1, a2)
+
+    def _add_lex_order(self, a1, a2):
+        # Linear Lex-Leader Symmetry Breaking (Độ phức tạp O(S))
+        y1 = [self.y[(a1, s)] for s in range(self.inst.S) if (a1, s) in self.y]
+        y2 = [self.y[(a2, s)] for s in range(self.inst.S) if (a2, s) in self.y]
+        
+        if not y1 or not y2: return
+        
+        n = len(y1)
+        e = [self._new() for _ in range(n)]
+        self._add_hard([e[0]]) # e[0] luôn là True ở đầu chuỗi
+        
+        for j in range(1, n):
+            # e[j] -> e[j-1]
+            self._add_hard([-e[j], e[j-1]])
+            # e[j] -> (y1[j-1] == y2[j-1])
+            self._add_hard([-e[j], -y1[j-1], y2[j-1]])
+            self._add_hard([-e[j], -y2[j-1], y1[j-1]])
+            # (e[j-1] and y1[j-1] == y2[j-1]) -> e[j]
+            self._add_hard([-e[j-1], -y1[j-1], -y2[j-1], e[j]])
+            self._add_hard([-e[j-1], y1[j-1], y2[j-1], e[j]])
+            
+        # Ràng buộc Lex chính: e[j] -> (y1[j] >= y2[j])
+        for j in range(n):
+            self._add_hard([-e[j], -y2[j], y1[j]])
+
 
 
 # ---------------------------------------------------------------------------

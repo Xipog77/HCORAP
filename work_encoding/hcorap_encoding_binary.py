@@ -1,23 +1,3 @@
-"""
-Python port of the HCORAP encoding from C++ (HCORAPEncoding.cpp + smtformula.cpp).
-
-Exposes the API expected by maxsat_solver.py:
-  - HCORAPInstance(filepath)
-  - HCORAPEncoding(instance)  with .hard_clauses, .soft_clauses, .vm
-  - verify_solution(inst, enc, model)
-
-All clauses use plain integers (positive = true, negative = negated),
-compatible with PySAT's WCNF format.
-
-NOTE vs original C++:
-  - The C++ code uses Literal/Clause objects with operator overloading.
-    Here we use plain ints: var_id for positive, -var_id for negated.
-  - AMO uses quadratic encoding (same default as C++ AMO_QUAD).
-  - Sorting network is the Batcher odd-even mergesort from smtformula.cpp.
-  - Service coverage (constraint 1.2) is a hard clause (strat=False mode),
-    matching the non-stratified C++ behaviour used in the standard pipeline.
-"""
-
 from collections import Counter
 
 
@@ -370,20 +350,6 @@ class HCORAPEncoding:
         # --- [THÊM MỚI]: Gọi Symmetry Breaking sau khi có đủ biến y ---
         self._add_symmetry_breaking() 
 
-        # --- Soft Clauses / Objective ---
-        # BẠN CÓ THỂ SWITCH GIỮA 2 HÀM NÀY ĐỂ SO SÁNH:
-        self._encode_soft()
-        # self._encode_soft_binary()
-
-        # --- 10) Service coverage ---
-        for s in range(inst.S):
-            yvars = [self.y[(a, s)] for a in range(inst.A) if (a, s) in self.y]
-            self._add_hard(yvars)
-
-        print(f"c {self.total_soft} {self.konstant_revenue}")
-
-    def _encode_soft(self):
-        inst = self.inst
         # --- 7) Objective O2: Stability (Sequence consistency) ---
         for q in range(len(inst.SEQ)):
             if len(inst.SEQ[q]) == 1: continue
@@ -393,6 +359,8 @@ class HCORAPEncoding:
             vout = self._totalizer(wvars) 
             p = min(inst.A, len(inst.SEQ[q]))
             for i in range(p):
+                # REWARD when vout[i] is False (means we have fewer than i+1 agents)
+                # This effectively MINIMIZES the number of agents per sequence.
                 self._add_soft(-vout[i], 1)
                 self.total_soft += 1
             self.konstant_revenue += len(inst.SEQ[q]) - p
@@ -403,6 +371,7 @@ class HCORAPEncoding:
                 if (a, s) in self.y:
                     weight = inst.r[a][s]
                     if weight > 0:
+                        # REWARD similarity
                         self._add_soft(self.y[(a, s)], weight)
                         self.total_soft += weight
 
@@ -420,106 +389,17 @@ class HCORAPEncoding:
             abs_P = abs(inst.P)
             limit = min(max_hours, len(vout))
             for k in range(inst.HN[a], limit):
+                # PENALTY for extra hours (REWARD when vout[k] is False)
                 self._add_soft(-vout[k], abs_P)
                 self.total_soft += abs_P
             self.konstant_revenue += (limit - inst.HN[a]) * inst.P
 
-    def _encode_soft_binary(self):
-        import math
-        from pysat.pb import PBEnc, EncType
-        inst = self.inst
-        
-        lits = []
-        weights = []
-        
-        max_similarity = 0
-        max_stability = 0
-        max_cost_avoidance = 0
+        # --- 10) Service coverage ---
+        for s in range(inst.S):
+            yvars = [self.y[(a, s)] for a in range(inst.A) if (a, s) in self.y]
+            self._add_hard(yvars)
 
-        # --- O2: Stability ---
-        for q in range(len(inst.SEQ)):
-            if len(inst.SEQ[q]) == 1: continue
-            wvars = [self.s[(a, q)] for a in range(inst.A) if (a, q) in self.s]
-            if not wvars: continue
-            
-            vout = self._totalizer(wvars) 
-            p = min(inst.A, len(inst.SEQ[q]))
-            for i in range(p):
-                lits.append(-vout[i])
-                weights.append(1)
-                max_stability += 1
-            self.konstant_revenue += len(inst.SEQ[q]) - p
-
-        # --- O1: Similarity ---
-        for a in range(inst.A):
-            for s in range(inst.S):
-                if (a, s) in self.y:
-                    weight = inst.r[a][s]
-                    if weight > 0:
-                        lits.append(self.y[(a, s)])
-                        weights.append(weight)
-                        max_similarity += weight
-
-        # --- O3: Cost avoidance ---
-        abs_P = abs(inst.P)
-        for a in range(inst.A):
-            yvars = [self.y[(a, s)] for s in range(inst.S) if (a, s) in self.y]
-            if not yvars: continue
-            
-            max_hours = inst.HN[a] + inst.HE[a]
-            vout = self._totalizer(yvars) 
-            
-            if len(yvars) > max_hours:
-                self._add_hard([-vout[max_hours]])
-            
-            limit = min(max_hours, len(vout))
-            for k in range(inst.HN[a], limit):
-                lits.append(-vout[k])
-                weights.append(abs_P)
-                max_cost_avoidance += abs_P
-            self.konstant_revenue += (limit - inst.HN[a]) * inst.P
-
-        UB = max_similarity + max_stability + max_cost_avoidance
-        if UB == 0:
-            return
-
-        # --- Binary Representation Variables ---
-        num_bits = math.ceil(math.log2(UB + 1))
-        if num_bits == 0: num_bits = 1
-        binU = [self._new() for _ in range(num_bits)]
-
-        # --- Soft Clauses (Maximize the binary integer value) ---
-        for j in range(num_bits):
-            weight = 1 << j
-            self._add_soft(binU[j], weight)
-            self.total_soft += weight
-
-        # --- Pseudo-Boolean Constraint ---
-        # Sum(2^j * binU[j]) <= Sum(w_i * lit_i)
-        # Transformed to PBEnc compatible positive weights:
-        # Sum(2^j * binU[j]) + Sum(w_i * (-lit_i)) <= Sum(w_i)
-        pb_lits = []
-        pb_weights = []
-        
-        for j in range(num_bits):
-            pb_lits.append(binU[j])
-            pb_weights.append(1 << j)
-            
-        sum_w = 0
-        for l, w in zip(lits, weights):
-            pb_lits.append(-l) # Negation of lit_i (False => value 1)
-            pb_weights.append(w)
-            sum_w += w
-            
-        # Convert PB to CNF using pysat.pb.PBEnc
-        cnf = PBEnc.atmost(lits=pb_lits, weights=pb_weights, bound=sum_w, top_id=self.vm.num_vars, encoding=EncType.adder)
-        
-        for clause in cnf.clauses:
-            self._add_hard(clause)
-            
-        # Update VarManager
-        if cnf.nv > self.vm.num_vars:
-            self.vm._next = cnf.nv + 1
+        print(f"c {self.total_soft} {self.konstant_revenue}")
 
 # ---------------------------------------------------------------------------
 # new
@@ -557,19 +437,11 @@ class HCORAPEncoding:
 
         
     def _add_sequential_counter_amo(self, lits):
-        """Sequential Counter Encoding for At Most One (Sinz, 2005) with Hybrid threshold.
-        Uses Quadratic AMO for small groups (n <= 10) to speed up UNSAT proofs.
-        Uses Sequential Counter for large groups to prevent clause explosion.
+        """Sequential Counter Encoding for At Most One (Sinz, 2005).
+        Uses n-1 auxiliary variables and 3n-4 clauses.
         """
         n = len(lits)
         if n <= 1:
-            return
-            
-        # Hybrid Threshold: Quadratic is extremely fast for UNSAT proofs on small sets
-        if n <= 10:
-            for i in range(n):
-                for j in range(i + 1, n):
-                    self._add_hard([-lits[i], -lits[j]])
             return
         
         # s[i] represents whether at least one of the first i+1 variables is True

@@ -1,21 +1,3 @@
-#!/usr/bin/env python3
-"""
-MaxSAT solver for the HCORAP problem.
-
-Uses PySAT's RC2 (core-guided MaxSAT solver) to solve the
-partial weighted MaxSAT encoding in a single invocation.
-
-Corresponds to Section 6.3 in doc/main.tex.
-
-Usage:
-    python3 maxsat_solver.py <instance>
-    python3 maxsat_solver.py instance1.txt   # uses instance1.wcnf if present
-
-  If ``INSTANCE.wcnf`` exists (e.g. from hcorap2sat), runs WMaxCDCL when the
-  binary is found (``./solver/wmaxcdcl_static`` or ``HCORAP_WMAXCDCL``), then
-  RC2 on that WCNF for EvalMaxSAT-comparable ``optimal`` / cost.
-"""
-
 import time
 import argparse
 import subprocess
@@ -24,12 +6,14 @@ from pathlib import Path
 from pysat.formula import WCNF
 from pysat.examples.rc2 import RC2
 
-# from hcorap_encoding import HCORAPInstance, HCORAPEncoding, verify_solution
-from hcorap_encoding_new import HCORAPInstance, HCORAPEncoding, verify_solution
+from hcorap_encoding import HCORAPInstance, HCORAPEncoding, verify_solution
+# from hcorap_encoding_new import HCORAPInstance, HCORAPEncoding, verify_solution
+# from hcorap_encoding_binary import HCORAPInstance, HCORAPEncoding, verify_solution
 from hcorap_wcnf import (
     load_hcorap2sat_wcnf,
     parse_wmaxcdcl_stats,
     parse_generic_maxsat_cost,
+    parse_maxsat_status,
     parse_maxsat_model,
     resolve_solver_exe,
     run_external_solver,
@@ -69,7 +53,7 @@ def solve_maxsat(enc: HCORAPEncoding):
 
     if model is None:
         print(f"[INFO] UNSATISFIABLE ({t_solve:.2f}s)")
-        return None
+        return False, None
 
     # RC2: rc2.cost = total weight of *falsified* soft clauses (standard MaxSAT cost).
     # EvalMaxSAT / many solvers print successive `o` lines as this cost (lower is better).
@@ -116,8 +100,13 @@ def solve_external(enc: HCORAPEncoding, solver_exe: str, instance_name: str):
         pass
 
     # Parse
+    status = parse_maxsat_status(out)
     cost = parse_generic_maxsat_cost(out)
     model = parse_maxsat_model(out)
+
+    if status == "UNSATISFIABLE" or code == 20:
+        print(f"[INFO] UNSATISFIABLE ({t_solve:.2f}s)")
+        return False, None
 
     if cost is not None:
         total_soft_W = sum(w for _, w in enc.soft_clauses)
@@ -133,6 +122,11 @@ def solve_external(enc: HCORAPEncoding, solver_exe: str, instance_name: str):
             opt, msat, _ = stats
             print(f"[INFO] External Solver (WMaxCDCL): optimal={opt}, maxsat={msat} ({t_solve:.2f}s)")
             return None, model # satisfied_w is hard to guess for WMaxCDCL without more info
+
+    if status == "OPTIMUM FOUND" or status == "SATISFIABLE":
+        # We had status but no cost/model? That's weird but possible
+        print(f"[INFO] External Solver: status={status} ({t_solve:.2f}s)")
+        return None, model
 
     print(f"[ERROR] External solver failed or output could not be parsed (code {code}).")
     return None, None
@@ -202,12 +196,14 @@ def main():
 
     if result is not None:
         obj, model = result
-        if model:
+        if obj is False:
+            print(f"\n[INFO] UNSATISFIABLE")
+        elif model:
             verify_solution(inst, enc, model)
         elif obj is not None:
             print(f"[INFO] Optimum found: {obj} (but no model parsed for verification)")
     else:
-        print(f"\n[INFO] Could not find a solution.")
+        print(f"\n[INFO] Could not find a solution (solver error).")
 
     print()
 

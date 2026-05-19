@@ -79,6 +79,16 @@ def parse_generic_maxsat_cost(output: str) -> int | None:
     return None
 
 
+def parse_maxsat_status(output: str) -> str | None:
+    """
+    Parse standard MaxSAT output for the 's <STATUS>' line.
+    """
+    m = re.search(r"^s\s+(UNSATISFIABLE|SATISFIABLE|OPTIMUM FOUND|UNKNOWN)", output, re.MULTILINE | re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    return None
+
+
 def parse_maxsat_model(output: str) -> list[int] | None:
     """
     Parse standard MaxSAT output for the 'v' line.

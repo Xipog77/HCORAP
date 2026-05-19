@@ -1,41 +1,107 @@
--- sorting network encoding
-Trong ngữ cảnh của bài toán MaxSAT và tài liệu nghiên cứu bạn cung cấp, **Sorting Network Encoding** (Mã hóa mạng lưới phân loại) là một kỹ thuật mạnh mẽ được sử dụng để chuyển đổi các **ràng buộc số lượng (cardinality constraints)** thành các mệnh đề logic mà bộ giải SAT có thể hiểu được[cite: 1].
-
-Dưới đây là chi tiết về kỹ thuật này:
-
-### 1. Định nghĩa cơ bản
-Bình thường, trong logic mệnh đề, chúng ta không thể viết trực tiếp phép toán cộng như $\sum x_i \ge k$[cite: 1]. Sorting Network Encoding giải quyết vấn đề này bằng cách mô phỏng một mạng lưới phần cứng dùng để sắp xếp các bit dữ liệu[cite: 1].
-
-*   **Đầu vào**: Một tập hợp $n$ biến Boolean $\{x_1, x_2, ..., x_n\}$[cite: 1].
-*   **Đầu ra**: Một tập hợp $n$ biến mới $\{y_1, y_2, ..., y_n\}$ đã được "sắp xếp"[cite: 1].
-*   **Nguyên lý**: Các giá trị "True" (1) sẽ được đẩy về phía đầu của dãy đầu ra[cite: 1]. Nếu có $k$ biến đầu vào là True, thì $k$ biến đầu ra đầu tiên ($y_1, ..., y_k$) sẽ là True, và các biến còn lại ($y_{k+1}, ..., y_n$) sẽ là False[cite: 1].
+--Thử áp dụng Sequencial Counter cho AMO
+-- Bổ sung thêm tài liệu về symetry breaking (giải thích)
+-- thử áp dụng Binary MAXSAT
+ Tìm hiểu các trích dẫn cho các mô hình bài toán nhỏ, Heuristic, MIP, CP
 
 
+Cơ chế Phá vỡ Đối xứng (Symmetry Breaking):
 
-### 2. Cách hoạt động: Bộ so sánh (Comparator)
-Trái tim của mạng lưới này là các "bộ so sánh" nhận 2 đầu vào ($x_1, x_2$) và trả về 2 đầu ra ($out_{max}, out_{min}$)[cite: 1]:
-*   $out_{max} = x_1 \lor x_2$ (True nếu ít nhất một đầu vào là True)[cite: 1].
-*   $out_{min} = x_1 \land x_2$ (True nếu cả hai đầu vào đều là True)[cite: 1].
+Bản cũ: Không có phá vỡ đối xứng, gây trùng lặp lời giải vô ích.
+Bản mới: Tự động phát hiện các Agent giống nhau và áp đặt ràng buộc Linear Lex-Leader tối ưu ($O(S)$ biến và clauses) thay vì Totalizer Cardinality ($O(S^2)$), ngăn chặn hoàn toàn hiện tượng bùng nổ biến mệnh đề.
+Mã hóa ràng buộc At-Most-One (AMO):
 
-Bằng cách kết nối nhiều bộ so sánh theo cấu trúc như **Batcher's Odd-Even Mergesort**, hệ thống có thể đếm được tổng số biến đang mang giá trị True[cite: 1].
+Bản cũ: Sử dụng Quadratic AMO ($O(n^2)$ clauses), rất dễ phình to số mệnh đề trên các instance lớn.
+Bản mới: Tích hợp Sequential Counter AMO (Sinz, 2005) chỉ tốn $n-1$ biến phụ và $3n-4$ clauses, đạt tính arc-consistency hoàn hảo cho bộ giải SAT.
+Mã hóa bộ đếm Cardinality Constraints (O2 & O3):
 
-### 3. Ứng dụng cụ thể trong bài toán HCORAP
-Trong tài liệu bạn tham khảo, mã hóa này được dùng để xử lý hai thành phần quan trọng[cite: 1]:
+Bản cũ: Dùng Sorting Network dựa trên mạng Batcher's Odd-Even Mergesort tương đối phức tạp.
+Bản mới: Thay thế bằng Totalizer Encoding, cấu trúc dạng cây nhị phân trực quan và tối ưu hơn cho quá trình Unit Propagation của solver MaxSAT.
+Ràng buộc Phủ dịch vụ (Service Coverage):
 
-*   **Giờ làm việc của nhân viên ($w_{a,i}$)**: Dùng để xác định xem nhân viên $a$ có làm việc ít nhất $i$ giờ hay không[cite: 1]. Hệ thống sắp xếp các khung giờ làm việc của nhân viên; nếu biến đầu ra thứ $i$ là True, nghĩa là nhân viên đó đã làm việc ít nhất $i$ giờ[cite: 1].
-*   **Số lượng nhân viên khác nhau ($c_{q,i}$)**: Dùng để đếm xem có bao nhiêu nhân viên khác nhau tham gia vào một chuỗi dịch vụ $q$ của người dùng[cite: 1]. Nếu biến đầu ra thứ $i$ của mạng lưới này là True, điều đó có nghĩa là có ít nhất $i$ nhân viên tham gia[cite: 1].
+Bản cũ: Dùng soft/hard clause tùy biến (qua strat).
+Bản mới: Chuẩn hóa trực tiếp thành Hard Clause đảm bảo tính chính xác và ràng buộc cứng tuyệt đối của mô hình.
 
-### 4. Tại sao lại sử dụng kỹ thuật này?
-*   **Tính hiệu quả**: Nó tạo ra cấu trúc mệnh đề giúp bộ giải SAT thực hiện "lan truyền đơn vị" (unit propagation) rất nhanh[cite: 1].
-*   **Độ phức tạp**: Mã hóa này chỉ giới thiệu thêm $O(n \log^2 n)$ biến và mệnh đề mới, giúp bài toán duy trì ở quy mô có thể giải được (polynomial size) ngay cả khi số lượng dịch vụ và nhân viên tăng lên[cite: 1].
-*   **Khả năng tối ưu**: Nó cho phép định nghĩa các biến phụ trợ ($y_i$) để gán trọng số (soft clauses), từ đó giúp bộ giải MaxSAT biết được khi nào cần "phạt" hoặc "thưởng" dựa trên số lượng cụ thể các điều kiện được thỏa mãn[cite: 1].
+Kết quả:
+Gốc:
+30
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U30
+Tổng thời gian:  30.28 phút
+Số bài giải được: 105
+Số bài UNSAT:     59
+Số bài Timeout:   1
+Số bài bị lỗi:    0
+========================================
 
-Tóm lại, Sorting Network Encoding đóng vai trò như một "bộ đếm logic" giúp chuyển đổi các phép tính số học (giờ làm việc, số nhân viên) sang ngôn ngữ của các mệnh đề True/False[cite: 1].
+40
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U40
+Tổng thời gian:  31.01 phút
+Số bài giải được: 19
+Số bài UNSAT:     37
+Số bài Timeout:   9
+Số bài bị lỗi:    0
+========================================
+Mới:
+30
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U30
+Tổng thời gian:  30.09 phút
+Số bài giải được: 93
+Số bài UNSAT:     58
+Số bài Timeout:   1
+Số bài bị lỗi:    0
+========================================
+40
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U40
+Tổng thời gian:  30.18 phút
+Số bài giải được: 17
+Số bài UNSAT:     35
+Số bài Timeout:   10
+Số bài bị lỗi:    0
+========================================
+Binary:
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U30
+Tổng thời gian:  30.55 phút
+Số bài giải được: 92
+Số bài UNSAT:     57
+Số bài Timeout:   1
+Số bài bị lỗi:    0
+========================================
+========================================
+      KẾT QUẢ BENCHMARK
+========================================
+Thư mục:        instances/paperInstances/TXT_10-25_4-5_U40
+Tổng thời gian:  31.37 phút
+Số bài giải được: 19
+Số bài UNSAT:     37
+Số bài Timeout:   9
+Số bài bị lỗi:    0
+========================================
 
-Hàm solve_incremental thực hiện tìm kiếm theo kiểu Top-Down (từ giá trị mục tiêu cao xuống thấp). Với bài toán có không gian tìm kiếm lớn, việc liên tục thêm các ràng buộc atmost vào solver sau mỗi bước nhảy sẽ làm "ô nhiễm" không gian hệ quả logic, khiến các lần gọi solver.solve() sau đó càng lúc càng nặng nề.
 
--- Đổi sang cardical: nhanh hơn so với PBEnc (262.61s vs 361.41s )
--- đổi sang linear search (nhanh hơn so với bài toán nhỏ, nhưng vẫn time-out tại bài toán lớn: 179.62s linear vs 485.86s-binary)
--- kiểm tra chuyển đổi c++ sang py. 
-Sau đó thử nghiệm các cách encoding mới
--- check lại các công thức-hàm encode được tác giả sử dụng
+### 1. Tại sao Bản Binary (`hcorap_encoding_binary.py`) lại chết yểu (Time-Out)?
+* **Lý do cốt lõi:** Kỹ thuật **Binary Representation** (sử dụng Pseudo-Boolean Adder) là "kẻ hủy diệt" đối với hàm mục tiêu dạng **Max-Sum**. 
+* **Bản chất:** Thay vì để cho thuật toán MaxSAT cực mạnh của EvalMaxSAT tự do gom nhóm và tìm Core (MUS) trên hàng ngàn Soft Clauses độc lập, phương pháp Binary lại *code cứng (hardcode)* toàn bộ phép tính cộng đó thành một khối mệnh đề logic khổng lồ (Hard Clauses). SAT Solver cực kỳ tệ trong việc làm toán cộng trừ (vì phải xử lý hàng vạn carry bits). Do đó, nó bị kẹt lại trong mớ bòng bong toán học và Time-out là điều tất yếu.
+
+### 2. Tại sao Bản Cải Tiến (`hcorap_encoding_new.py`) lại giải được ít bài hơn bản gốc?
+Nhìn vào kết quả của `TXT_10-25_4-5_U30`, bản gốc giải được **105 bài**, trong khi bản mới chỉ giải được **93 bài**. Sự thụt lùi này xuất phát từ 2 sai lầm chiến lược khi thay thế thuật toán:
+* **Sai lầm 1: Đổi Sorting Network lấy Totalizer.** 
+  Mạng Batcher's Sorting Network của bản gốc có độ phức tạp $O(N \log^2 N)$, trong khi Totalizer là $O(N^2)$. Đối với các biến đếm có mốc chặn cao (ví dụ $TS=60$ khung giờ), Totalizer sinh ra một lượng biến và mệnh đề khổng lồ, làm cản trở nghiêm trọng quá trình Unit Propagation (Lan truyền đơn vị) của bộ giải.
+* **Sai lầm 2: Sự chậm chạp của Sequential Counter khi chứng minh UNSAT.**
+  Mặc dù Hybrid Sequential Counter AMO ngăn bùng nổ clause, nhưng các biến phụ trợ ($s_i$) mà nó sinh ra làm chuỗi mâu thuẫn (conflict chain) trở nên dài hơn. Ngược lại, **Quadratic AMO** của bản gốc tạo ra xung đột trực tiếp giữa mọi cặp (Direct Conflict $\neg x_i \lor \neg x_j$), giúp bộ giải chốt hạ UNSAT gần như tức thì ($O(1)$). Do tỷ lệ bài UNSAT của bạn rất cao (gần một nửa), sự chậm trễ này kéo sập tổng thành tích.
+
+### 🔥 Kết Luận & "Ultimate" Encoding
+Phương pháp mã hóa của bản gốc `hcorap_encoding.py` **(Sorting Network + Quadratic AMO)** đã được tác giả tối ưu hóa quá tốt và phối hợp hoàn hảo với heuristics của EvalMaxSAT. 
