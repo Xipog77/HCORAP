@@ -6,19 +6,11 @@ Exposes the API expected by maxsat_solver.py:
   - HCORAPEncoding(instance)  with .hard_clauses, .soft_clauses, .vm
   - verify_solution(inst, enc, model)
 
-All clauses use plain integers (positive = true, negative = negated),
-compatible with PySAT's WCNF format.
-
-NOTE vs original C++:
-  - The C++ code uses Literal/Clause objects with operator overloading.
-    Here we use plain ints: var_id for positive, -var_id for negated.
-  - AMO uses quadratic encoding (same default as C++ AMO_QUAD).
-  - Sorting network is the Batcher odd-even mergesort from smtformula.cpp.
-  - Service coverage (constraint 1.2) is a hard clause (strat=False mode),
-    matching the non-stratified C++ behaviour used in the standard pipeline.
+Optimized with PySAT (CardEnc, ITotalizer) and Lex-Leader Symmetry Breaking.
 """
 
 from collections import Counter
+from pysat.card import CardEnc, EncType, ITotalizer
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +116,7 @@ class VarManager:
 
 
 # ---------------------------------------------------------------------------
-# Encoding  (faithful port of HCORAPEncoding::encode from C++)
+# Encoding
 # ---------------------------------------------------------------------------
 class HCORAPEncoding:
     """
@@ -146,7 +138,7 @@ class HCORAPEncoding:
         self.hard_clauses: list[list[int]] = []
         self.soft_clauses: list[tuple] = []
 
-        # Variable maps (key→var_id).  0 means "false variable".
+        # Variable maps (key→var_id).
         self.x = {}   # (a, s, t) -> var
         self.y = {}   # (a, s)    -> var
         self.su = {}  # (s, t)    -> var
@@ -154,7 +146,6 @@ class HCORAPEncoding:
 
         self.total_soft = 0
         self.konstant_revenue = 0
-        self.total_soft_strat = 0
 
         # false variable (unit clause forcing it false)
         self._false_id = self.vm.new_var()
@@ -162,7 +153,9 @@ class HCORAPEncoding:
 
         self._encode()
 
-    # -- helpers --------------------------------------------------------
+    # =========================================================================
+    # CORE HELPERS
+    # =========================================================================
     def _new(self):
         return self.vm.new_var()
 
@@ -177,105 +170,102 @@ class HCORAPEncoding:
     def _is_false(self, v):
         return v == self._false_id
 
-    # -- AMO (quadratic, same as C++ default AMO_QUAD) ------------------
-    def _add_amo(self, lits):
+    # =========================================================================
+    # CARDINALITY & AMO (Using PySAT)
+    # =========================================================================
+    def _totalizer(self, lits):
+        """Wrapper for PySAT's ITotalizer to get output bits (rhs)."""
+        if not lits: return []
+        if len(lits) == 1: return [lits[0]]
+        
+        tot = ITotalizer(lits=lits, ubound=len(lits), top_id=self.vm.num_vars)
+        for clause in tot.cnf.clauses:
+            self._add_hard(clause)
+            
+        if tot.cnf.nv > self.vm.num_vars:
+            self.vm._next = tot.cnf.nv + 1
+            
+        return tot.rhs
+
+    def _add_sequential_counter_amo(self, lits):
+        """
+        At Most One encoding with Hybrid threshold.
+        Uses Quadratic AMO for small groups (n <= 10) to speed up UNSAT proofs.
+        Uses PySAT's Sequential Counter for large groups to prevent clause explosion.
+        """
         n = len(lits)
         if n <= 1:
             return
-        for i in range(n - 1):
-            for j in range(i + 1, n):
-                self._add_hard([-lits[i], -lits[j]])
+            
+        if n <= 10:
+            for i in range(n):
+                for j in range(i + 1, n):
+                    self._add_hard([-lits[i], -lits[j]])
+            return
+            
+        cnf = CardEnc.atmost(lits, bound=1, top_id=self.vm.num_vars, encoding=EncType.seqcounter)
+        for clause in cnf.clauses:
+            self._add_hard(clause)
+            
+        if cnf.nv > self.vm.num_vars:
+            self.vm._next = cnf.nv + 1
 
-    # -- Sorting network (Batcher odd-even mergesort from smtformula.cpp)
-    def _two_comp(self, x1, x2):
-        """Two-comparator: returns (y_max, y_min)."""
-        y1 = self._new()
-        y2 = self._new()
-        # leq clauses
-        self._add_hard([-x1, y1])
-        self._add_hard([-x2, y1])
-        self._add_hard([-x1, -x2, y2])
-        # geq clauses
-        self._add_hard([x1, -y2])
-        self._add_hard([x2, -y2])
-        self._add_hard([x1, x2, -y1])
-        return y1, y2
+    # =========================================================================
+    # SYMMETRY BREAKING
+    # =========================================================================
+    def _add_symmetry_breaking(self):
+        inst = self.inst
+        # Tìm các nhóm agent có profile giống hệt nhau
+        groups = {}
+        for a in range(inst.A):
+            # Đặc trưng của Agent: r(a,s) và TSA(a)
+            profile = (tuple(inst.r[a]), tuple(inst.TSA[a]))
+            if profile not in groups: groups[profile] = []
+            groups[profile].append(a)
 
-    def _sorting(self, x):
-        n = len(x)
-        if n == 0:
-            return []
-        if n == 1:
-            return list(x)
-        if n == 2:
-            y1, y2 = self._two_comp(x[0], x[1])
-            return [y1, y2]
-        mid = n // 2
-        z1 = self._sorting(x[:mid])
-        z2 = self._sorting(x[mid:])
-        return self._merge(z1, z2)
+        for profile, agents in groups.items():
+            if len(agents) < 2: continue
+            
+            # Với mỗi cặp agent liên tiếp trong nhóm đối xứng
+            for i in range(len(agents) - 1):
+                a1, a2 = agents[i], agents[i+1]
+                # Ép thứ tự từ điển nghiêm ngặt (y1 >=lex y2)
+                self._add_lex_order(a1, a2)
 
-    def _merge(self, x1, x2):
-        a, b = len(x1), len(x2)
-        if a == 0:
-            return list(x2)
-        if b == 0:
-            return list(x1)
-        if a == 1 and b == 1:
-            y1, y2 = self._two_comp(x1[0], x2[0])
-            return [y1, y2]
+    def _add_lex_order(self, a1, a2):
+        """Linear Lex-Leader Symmetry Breaking (Độ phức tạp O(S))."""
+        y1 = [self.y[(a1, s)] for s in range(self.inst.S) if (a1, s) in self.y]
+        y2 = [self.y[(a2, s)] for s in range(self.inst.S) if (a2, s) in self.y]
+        
+        if not y1 or not y2: return
+        
+        n = len(y1)
+        e = [self._new() for _ in range(n)]
+        self._add_hard([e[0]]) # e[0] luôn là True ở đầu chuỗi
+        
+        for j in range(1, n):
+            # e[j] -> e[j-1]
+            self._add_hard([-e[j], e[j-1]])
+            # e[j] -> (y1[j-1] == y2[j-1])
+            self._add_hard([-e[j], -y1[j-1], y2[j-1]])
+            self._add_hard([-e[j], -y2[j-1], y1[j-1]])
+            # (e[j-1] and y1[j-1] == y2[j-1]) -> e[j]
+            self._add_hard([-e[j-1], -y1[j-1], -y2[j-1], e[j]])
+            self._add_hard([-e[j-1], y1[j-1], y2[j-1], e[j]])
+            
+        # Ràng buộc Lex chính: e[j] -> (y1[j] >= y2[j])
+        for j in range(n):
+            self._add_hard([-e[j], -y2[j], y1[j]])
 
-        x1e, x1o = x1[0::2], x1[1::2]
-        x2e, x2o = x2[0::2], x2[1::2]
-        ze = self._merge(x1e, x2e)
-        zo = self._merge(x1o, x2o)
-
-        y = [None] * (a + b)
-        z = [None] * (a + b)
-
-        if a % 2 == 0:
-            if b % 2 == 0:
-                for i in range((a + b) // 2):
-                    z[2 * i] = ze[i]
-                    z[2 * i + 1] = zo[i]
-                y[0] = z[0]
-                y[a + b - 1] = z[a + b - 1]
-                for i in range(1, a + b - 2, 2):
-                    y[i], y[i + 1] = self._two_comp(z[i], z[i + 1])
-            else:
-                for i in range((a + b) // 2 + 1):
-                    z[2 * i] = ze[i]
-                for i in range((a + b) // 2):
-                    z[2 * i + 1] = zo[i]
-                y[0] = z[0]
-                for i in range(1, a + b - 1, 2):
-                    y[i], y[i + 1] = self._two_comp(z[i], z[i + 1])
-        else:
-            if b % 2 == 0:
-                return self._merge(x2, x1)
-            else:
-                for i in range((a + 1) // 2):
-                    z[2 * i] = ze[i]
-                for i in range((b + 1) // 2):
-                    z[a + 2 * i] = ze[(a + 1) // 2 + i]
-                for i in range(a // 2):
-                    z[2 * i + 1] = zo[i]
-                for i in range(b // 2):
-                    z[a + 2 * i + 1] = zo[a // 2 + i]
-                y[0] = z[0]
-                y[a + b - 1] = z[a + b - 1]
-                for i in range(1, a + b - 2, 2):
-                    y[i], y[i + 1] = self._two_comp(z[i], z[i + 1])
-        return y
-
-    # -- main encoding --------------------------------------------------
+    # =========================================================================
+    # MAIN ENCODING FLOW
+    # =========================================================================
     def _encode(self):
         inst = self.inst
-        F = self._false_id
         self.total_soft = 0
         self.konstant_revenue = 0
 
-        # --- [BƯỚC 1]: Khởi tạo variables (Giữ nguyên phần này) ---
+        # --- 1. Create variables ---
         for a in range(inst.A):
             for s in range(inst.S):
                 if inst.r[a][s] == 0: continue
@@ -301,7 +291,7 @@ class HCORAPEncoding:
                 else:
                     self.s[(a, q)] = self._new()
 
-        # --- 5) Reification: y[a,s] <==> OR_t x[a,s,t] ---
+        # --- 2. Reification: y[a,s] <==> OR_t x[a,s,t] ---
         for a in range(inst.A):
             for s in range(inst.S):
                 if (a, s) not in self.y: continue
@@ -314,7 +304,7 @@ class HCORAPEncoding:
                     self._add_hard([-xv, yv])
                 self._add_hard([-yv] + xvars)
 
-        # --- 5b) Reification: su[s,t] <==> OR_a x[a,s,t] ---
+        # --- 3. Reification: su[s,t] <==> OR_a x[a,s,t] ---
         for s in range(inst.S):
             for t in range(inst.TS):
                 if (s, t) not in self.su: continue
@@ -327,33 +317,29 @@ class HCORAPEncoding:
                     self._add_hard([-xv, zv])
                 self._add_hard([-zv] + xvars)
 
-        # --- 1) AMO: each service at most one (agent, timeslot) ---
+        # --- 4. AMO Constraints ---
+        # 4.1: Each service at most one (agent, timeslot)
         for s in range(inst.S):
             xvars = [self.x[(a, s, t)] for a in range(inst.A)
                      for t in range(inst.TS) if (a, s, t) in self.x]
-            # self._add_commander_amo(xvars) 
             self._add_sequential_counter_amo(xvars)
 
-        # --- [THAY THẾ 2]: AMO cho từng nhân viên/khung giờ ---
+        # 4.2: AMO cho từng nhân viên/khung giờ
         for a in range(inst.A):
             for t in range(inst.TS):
                 xvars = [self.x[(a, s, t)] for s in range(inst.S)
                          if (a, s, t) in self.x]
-                # Thay đổi sang Commander/Sequential Counter Encoding
-                # self._add_commander_amo(xvars) 
                 self._add_sequential_counter_amo(xvars)
 
-        # --- [THAY THẾ 3]: AMO cho từng user-group ---
+        # 4.3: AMO cho từng user-group
         for su_group in inst.SU:
             for t in range(inst.TS):
                 zvars = [self.su[(s, t)] for s in su_group
                          if (s, t) in self.su]
-                # Thay đổi sang Commander/Sequential Counter Encoding
-                # self._add_commander_amo(zvars) 
                 self._add_sequential_counter_amo(zvars) 
 
-        # --- 6) Reification of sequences (size > 1) ---
-        #     s[a,q] <==> OR_{j in SEQ[q]} y[a,j]
+        # --- 5. Reification of sequences (size > 1) ---
+        # s[a,q] <==> OR_{j in SEQ[q]} y[a,j]
         for a in range(inst.A):
             for q in range(len(inst.SEQ)):
                 if len(inst.SEQ[q]) == 1: continue
@@ -367,15 +353,13 @@ class HCORAPEncoding:
                     self._add_hard([-yv, wv])
                 self._add_hard([-wv] + yvars)
 
-        # --- [THÊM MỚI]: Gọi Symmetry Breaking sau khi có đủ biến y ---
+        # --- 6. Symmetry Breaking ---
         self._add_symmetry_breaking() 
 
-        # --- Soft Clauses / Objective ---
-        # BẠN CÓ THỂ SWITCH GIỮA 2 HÀM NÀY ĐỂ SO SÁNH:
+        # --- 7. Objectives Encoding ---
         self._encode_soft()
-        # self._encode_soft_binary()
 
-        # --- 10) Service coverage ---
+        # --- 8. Service coverage ---
         for s in range(inst.S):
             yvars = [self.y[(a, s)] for a in range(inst.A) if (a, s) in self.y]
             self._add_hard(yvars)
@@ -384,7 +368,7 @@ class HCORAPEncoding:
 
     def _encode_soft(self):
         inst = self.inst
-        # --- 7) Objective O2: Stability (Sequence consistency) ---
+        # --- Objective O2: Stability (Sequence consistency) ---
         for q in range(len(inst.SEQ)):
             if len(inst.SEQ[q]) == 1: continue
             wvars = [self.s[(a, q)] for a in range(inst.A) if (a, q) in self.s]
@@ -397,7 +381,7 @@ class HCORAPEncoding:
                 self.total_soft += 1
             self.konstant_revenue += len(inst.SEQ[q]) - p
 
-        # --- 8) Objective O1: Similarity (Expertise reward) ---
+        # --- Objective O1: Similarity (Expertise reward) ---
         for a in range(inst.A):
             for s in range(inst.S):
                 if (a, s) in self.y:
@@ -406,7 +390,7 @@ class HCORAPEncoding:
                         self._add_soft(self.y[(a, s)], weight)
                         self.total_soft += weight
 
-        # --- 9) Objective O3: Working hours ---
+        # --- Objective O3: Working hours ---
         for a in range(inst.A):
             yvars = [self.y[(a, s)] for s in range(inst.S) if (a, s) in self.y]
             if not yvars: continue
@@ -423,267 +407,6 @@ class HCORAPEncoding:
                 self._add_soft(-vout[k], abs_P)
                 self.total_soft += abs_P
             self.konstant_revenue += (limit - inst.HN[a]) * inst.P
-
-    def _encode_soft_binary(self):
-        import math
-        from pysat.pb import PBEnc, EncType
-        inst = self.inst
-        
-        lits = []
-        weights = []
-        
-        max_similarity = 0
-        max_stability = 0
-        max_cost_avoidance = 0
-
-        # --- O2: Stability ---
-        for q in range(len(inst.SEQ)):
-            if len(inst.SEQ[q]) == 1: continue
-            wvars = [self.s[(a, q)] for a in range(inst.A) if (a, q) in self.s]
-            if not wvars: continue
-            
-            vout = self._totalizer(wvars) 
-            p = min(inst.A, len(inst.SEQ[q]))
-            for i in range(p):
-                lits.append(-vout[i])
-                weights.append(1)
-                max_stability += 1
-            self.konstant_revenue += len(inst.SEQ[q]) - p
-
-        # --- O1: Similarity ---
-        for a in range(inst.A):
-            for s in range(inst.S):
-                if (a, s) in self.y:
-                    weight = inst.r[a][s]
-                    if weight > 0:
-                        lits.append(self.y[(a, s)])
-                        weights.append(weight)
-                        max_similarity += weight
-
-        # --- O3: Cost avoidance ---
-        abs_P = abs(inst.P)
-        for a in range(inst.A):
-            yvars = [self.y[(a, s)] for s in range(inst.S) if (a, s) in self.y]
-            if not yvars: continue
-            
-            max_hours = inst.HN[a] + inst.HE[a]
-            vout = self._totalizer(yvars) 
-            
-            if len(yvars) > max_hours:
-                self._add_hard([-vout[max_hours]])
-            
-            limit = min(max_hours, len(vout))
-            for k in range(inst.HN[a], limit):
-                lits.append(-vout[k])
-                weights.append(abs_P)
-                max_cost_avoidance += abs_P
-            self.konstant_revenue += (limit - inst.HN[a]) * inst.P
-
-        UB = max_similarity + max_stability + max_cost_avoidance
-        if UB == 0:
-            return
-
-        # --- Binary Representation Variables ---
-        num_bits = math.ceil(math.log2(UB + 1))
-        if num_bits == 0: num_bits = 1
-        binU = [self._new() for _ in range(num_bits)]
-
-        # --- Soft Clauses (Maximize the binary integer value) ---
-        for j in range(num_bits):
-            weight = 1 << j
-            self._add_soft(binU[j], weight)
-            self.total_soft += weight
-
-        # --- Pseudo-Boolean Constraint ---
-        # Sum(2^j * binU[j]) <= Sum(w_i * lit_i)
-        # Transformed to PBEnc compatible positive weights:
-        # Sum(2^j * binU[j]) + Sum(w_i * (-lit_i)) <= Sum(w_i)
-        pb_lits = []
-        pb_weights = []
-        
-        for j in range(num_bits):
-            pb_lits.append(binU[j])
-            pb_weights.append(1 << j)
-            
-        sum_w = 0
-        for l, w in zip(lits, weights):
-            pb_lits.append(-l) # Negation of lit_i (False => value 1)
-            pb_weights.append(w)
-            sum_w += w
-            
-        # Convert PB to CNF using pysat.pb.PBEnc
-        cnf = PBEnc.atmost(lits=pb_lits, weights=pb_weights, bound=sum_w, top_id=self.vm.num_vars, encoding=EncType.adder)
-        
-        for clause in cnf.clauses:
-            self._add_hard(clause)
-            
-        # Update VarManager
-        if cnf.nv > self.vm.num_vars:
-            self.vm._next = cnf.nv + 1
-
-# ---------------------------------------------------------------------------
-# new
-# ---------------------------------------------------------------------------
-
-# Thay thế hàm _sorting bằng _totalizer
-    def _totalizer(self, lits):
-        n = len(lits)
-        if n == 0: return []
-        if n == 1: return [lits[0]]
-        
-        mid = n // 2
-        left = self._totalizer(lits[:mid])
-        right = self._totalizer(lits[mid:])
-        return self._merge_totalizer(left, right)
-
-    def _merge_totalizer(self, left, right):
-        n_l, n_r = len(left), len(right)
-        res = [self._new() for _ in range(n_l + n_r)]
-        
-        # Ràng buộc cơ bản của Totalizer:
-        # Nếu left có i bit True và right có j bit True, thì res có ít nhất i+j bit True
-        for i in range(n_l + 1):
-            for j in range(n_r + 1):
-                if i == 0 and j == 0: continue
-                
-                clause = []
-                if i > 0: clause.append(-left[i-1])
-                if j > 0: clause.append(-right[j-1])
-                
-                if i + j <= n_l + n_r:
-                    clause.append(res[i + j - 1])
-                    self._add_hard(clause)
-        return res
-
-        
-    def _add_sequential_counter_amo(self, lits):
-        """Sequential Counter Encoding for At Most One (Sinz, 2005) with Hybrid threshold.
-        Uses Quadratic AMO for small groups (n <= 10) to speed up UNSAT proofs.
-        Uses Sequential Counter for large groups to prevent clause explosion.
-        """
-        n = len(lits)
-        if n <= 1:
-            return
-            
-        # Hybrid Threshold: Quadratic is extremely fast for UNSAT proofs on small sets
-        if n <= 10:
-            for i in range(n):
-                for j in range(i + 1, n):
-                    self._add_hard([-lits[i], -lits[j]])
-            return
-        
-        # s[i] represents whether at least one of the first i+1 variables is True
-        s = [self._new() for _ in range(n - 1)]
-        
-        # 1. First element: x_0 -> s_0
-        self._add_hard([-lits[0], s[0]])
-        
-        # 2. General transition and exclusion
-        for i in range(1, n - 1):
-            # x_i -> s_i
-            self._add_hard([-lits[i], s[i]])
-            # s_{i-1} -> s_i
-            self._add_hard([-s[i-1], s[i]])
-            # s_{i-1} -> not x_i
-            self._add_hard([-s[i-1], -lits[i]])
-            
-        # 3. Last element exclusion: s_{n-2} -> not x_{n-1}
-        self._add_hard([-s[n - 2], -lits[n - 1]])
-
-    def _add_commander_amo(self, lits, k=3):
-        """Standard Commander Encoding for At Most One."""
-        n = len(lits)
-        if n <= 1: return
-        if n <= k:
-            self._add_amo_quadratic(lits)
-            return
-
-        groups = [lits[i:i + k] for i in range(0, n, k)]
-        commanders = []
-
-        for group in groups:
-            cmd = self._new()
-            commanders.append(cmd)
-            
-            # 1. At most one in each group
-            self._add_amo_quadratic(group)
-            
-            # 2. If any lit is True, commander must be True
-            for lit in group:
-                self._add_hard([-lit, cmd])
-                
-            # 3. IMPORTANT for AMO: We do NOT add (cmd -> OR group)
-            # because the commander can be False if the whole group is False.
-            # But if a lit is True, the commander IS True.
-            # Combined with AMO(commanders), this ensures at most one group is active.
-
-        self._add_commander_amo(commanders, k)
-
-    def _add_amo_quadratic(self, lits):
-        n = len(lits)
-        for i in range(n):
-            for j in range(i + 1, n):
-                self._add_hard([-lits[i], -lits[j]])
-
-    def _add_symmetry_breaking(self):
-        inst = self.inst
-        # Tìm các nhóm agent có profile giống hệt nhau
-        groups = {}
-        for a in range(inst.A):
-            # Đặc trưng của Agent: r(a,s) và TSA(a)
-            profile = (tuple(inst.r[a]), tuple(inst.TSA[a]))
-            if profile not in groups: groups[profile] = []
-            groups[profile].append(a)
-
-        for profile, agents in groups.items():
-            if len(agents) < 2: continue
-            
-            # Với mỗi cặp agent liên tiếp trong nhóm đối xứng
-            for i in range(len(agents) - 1):
-                a1, a2 = agents[i], agents[i+1]
-                # Ép thứ tự: Số dịch vụ agent i làm phải >= agent i+1
-                # (Hoặc ép thứ tự từ điển trên vector y[a, s])
-                self._add_lex_order(a1, a2)
-
-    def _add_lex_order(self, a1, a2):
-        # =====================================================================
-        # CŨ (Dùng để so sánh): Cardinality-based symmetry breaking using Totalizer
-        # Ràng buộc đơn giản: Count(y[a1, s]) >= Count(y[a2, s])
-        # Sử dụng các bit đầu ra từ Totalizer của mỗi agent
-        # 
-        # y1 = [self.y[(a1, s)] for s in range(self.inst.S) if (a1, s) in self.y]
-        # y2 = [self.y[(a2, s)] for s in range(self.inst.S) if (a2, s) in self.y]
-        # if not y1 or not y2: return
-        # out1 = self._totalizer(y1)
-        # out2 = self._totalizer(y2)
-        # for k in range(min(len(out1), len(out2))):
-        #     self._add_hard([-out2[k], out1[k]])
-        # =====================================================================
-
-        # MỚI (Tối ưu): Linear Lex-Leader Symmetry Breaking (Độ phức tạp O(S))
-        # Ép thứ tự từ điển nghiêm ngặt: y1 >=lex y2
-        y1 = [self.y[(a1, s)] for s in range(self.inst.S) if (a1, s) in self.y]
-        y2 = [self.y[(a2, s)] for s in range(self.inst.S) if (a2, s) in self.y]
-        
-        if not y1 or not y2: return
-        
-        n = len(y1)
-        e = [self._new() for _ in range(n)]
-        self._add_hard([e[0]]) # e[0] luôn là True ở đầu chuỗi
-        
-        for j in range(1, n):
-            # e[j] -> e[j-1]
-            self._add_hard([-e[j], e[j-1]])
-            # e[j] -> (y1[j-1] == y2[j-1])
-            self._add_hard([-e[j], -y1[j-1], y2[j-1]])
-            self._add_hard([-e[j], -y2[j-1], y1[j-1]])
-            # (e[j-1] and y1[j-1] == y2[j-1]) -> e[j]
-            self._add_hard([-e[j-1], -y1[j-1], -y2[j-1], e[j]])
-            self._add_hard([-e[j-1], y1[j-1], y2[j-1], e[j]])
-            
-        # Ràng buộc Lex chính: e[j] -> (y1[j] >= y2[j])
-        for j in range(n):
-            self._add_hard([-e[j], -y2[j], y1[j]])
 
 
 # ---------------------------------------------------------------------------
