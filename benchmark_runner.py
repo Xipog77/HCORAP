@@ -12,7 +12,7 @@ INSTANCE_FOLDER = "instances/paperInstances/TXT_10-25_4-5_U40"
 SOLVE_COMMAND = "python3 work_encoding/maxsat_solver.py {instance} --solver ./solver/EvalMaxSAT_bin"
 
 # Cài đặt thời gian (giây)
-INSTANCE_TIMEOUT = 120       
+INSTANCE_TIMEOUT = 60       
 TOTAL_BENCHMARK_TIMEOUT = 1800 
 
 def run_benchmark():
@@ -67,11 +67,14 @@ def run_benchmark():
                     obj_match = re.search(r"Optimum found:\s*([-]?\d+)", output)
                 
                 obj_str = obj_match.group(1) if obj_match else "?"
-                print(f" XONG ({elapsed:.2f}s) -> Obj: {obj_str}")
+                print(f" OPT ({elapsed:.2f}s) -> Obj: {obj_str}")
                 results["solved"] += 1
             elif "UNSATISFIABLE" in output or "unsat" in output.lower():
                 print(f" UNSAT ({elapsed:.2f}s)")
                 results["unsat"] += 1
+            elif "SATISFIABLE" in output or "sat" in output.lower():
+                print(f" SAT ({elapsed:.2f}s)")
+                results["solved"] += 1
             else:
                 print(f" LỖI (Không nhận diện được kết quả)")
                 results["error"] += 1

@@ -51,7 +51,6 @@ python3 new_encoding/incremental_sat_cardical.py instance.txt --solver cadical15
 ```
 # maxsat
 ```sh
-python3 new_encoding/maxsat_solver.py instance.txt
 python3 work_encoding/maxsat_solver.py instance.txt
 python3 work_encoding/maxsat_solver.py instance.txt --solver ./solver/EvalMaxSAT_bin
 ```
@@ -64,4 +63,19 @@ python3 work_encoding/normal_sat_linear.py instance.txt
 # benchmark
 ```sh
 python3 benchmark_runner.py
+```
+
+# hermax benchmark
+```sh
+python3 work_encoding/benchmark_hermax_compare.py
+```
+
+# hermax single instance solve
+```sh
+python3 work_encoding/hcorap_encoding_hermax.py instance.txt
+```
+
+# create_instance
+```
+python3 instances/create_instances.py Users, Agents, Services > instance.txt
 ```

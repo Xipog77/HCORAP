@@ -6,8 +6,8 @@ from pathlib import Path
 from pysat.formula import WCNF
 from pysat.examples.rc2 import RC2
 
-# from hcorap_encoding_origin import HCORAPInstance, HCORAPEncoding, verify_solution
-from hcorap_encoding_new import HCORAPInstance, HCORAPEncoding, verify_solution
+from hcorap_encoding_origin import HCORAPInstance, HCORAPEncoding, verify_solution
+# from hcorap_encoding_new import HCORAPInstance, HCORAPEncoding, verify_solution
 from hcorap_wcnf import (
     load_hcorap2sat_wcnf,
     parse_wmaxcdcl_stats,
